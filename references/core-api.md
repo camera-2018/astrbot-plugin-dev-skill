@@ -79,7 +79,7 @@ class AstrBotMessage:
 
 ### Plugin Registration
 
-- `@register(name, author, description, version, repo_url)`: Registers the plugin class. This is required for AstrBot to detect and load the plugin. Priority is lower than `metadata.yaml`.
+- `@register` is deprecated in newer versions. Please use `metadata.yaml` to define plugin metadata. AstrBot will automatically detect the plugin class inheriting from `Star`.
 
 ### Commands
 
