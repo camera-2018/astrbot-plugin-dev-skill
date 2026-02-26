@@ -13,10 +13,9 @@ Create a `main.py` in your plugin directory:
 
 ```python
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.api import logger
 
-@register("helloworld", "YourName", "A simple Hello World plugin", "1.0.0", "https://github.com/user/repo")
 class MyPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -32,6 +31,8 @@ class MyPlugin(Star):
     async def terminate(self):
         '''Called when the plugin is unloaded/disabled.'''
 ```
+
+**Note**: The `@register` decorator is deprecated in newer versions of AstrBot. Please use `metadata.yaml` to define plugin metadata. AstrBot automatically detects the plugin class inheriting from `Star`.
 
 ## Core Workflows
 
