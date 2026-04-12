@@ -1,30 +1,46 @@
-# AstrBot Elegant Plugin Patterns
+# AstrBot Reviewer-Friendly Patterns
+
+These patterns are chosen to satisfy both AstrBot's runtime model and `astr-plugin-reviewer`.
 
 ## Logging
-Use the AstrBot-provided logger for unified log management.
+
+Use AstrBot's logger only:
 
 ```python
 from astrbot.api import logger
-logger.info("Plugin initialized")
-logger.error("Failed to fetch data: %s", error)
+
+logger.info("plugin initialized")
+logger.error(f"request failed: {exc}")
 ```
 
-## Error Handling
-Always wrap external API calls and user input in `try-except`. Prevent the entire bot from crashing.
+Avoid:
+
+- `import logging`
+- `logging.getLogger(...)`
+- third-party loggers such as `loguru`
+
+## Persistence
+
+Prefer `StarTools.get_data_dir()` for plugin-owned runtime files:
 
 ```python
-try:
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-except Exception as e:
-    logger.error("Network error: %s", e)
-    yield event.plain_result(f"Error: {e}")
+from pathlib import Path
+
+from astrbot.api.star import StarTools
+
+data_dir: Path = StarTools.get_data_dir()
+cache_file = data_dir / "cache.json"
 ```
 
-## Persistent Storage
+Notes:
 
-### KV Storage (>= v4.9.2)
+- `get_data_dir()` returns a `Path`, not a string.
+- Keep runtime data out of the plugin source directory.
+- Bundled assets can stay in the repo; mutable runtime data should not.
+
+### KV Storage
+
+In newer AstrBot versions you can also use simple per-plugin KV helpers:
 
 ```python
 await self.put_kv_data("key", value)
@@ -32,63 +48,74 @@ value = await self.get_kv_data("key", default)
 await self.delete_kv_data("key")
 ```
 
-### Large File Storage
+## Async Network Access
+
+Use async HTTP clients:
 
 ```python
-from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+import httpx
 
-plugin_data_path = get_astrbot_data_path() / "plugin_data" / self.name
-plugin_data_path.mkdir(parents=True, exist_ok=True)
+
+async with httpx.AsyncClient(timeout=10) as client:
+    resp = await client.get(url)
+    resp.raise_for_status()
 ```
 
-## Async Tasks
-Register long-running or background tasks in `__init__`.
+Avoid:
+
+- `requests`
+- blocking polling loops
+- `time.sleep(...)` in async flows
+
+## Error Handling
+
+Wrap external calls and user-driven parsing so one failure does not crash the plugin:
 
 ```python
-import asyncio
-asyncio.create_task(self.my_background_worker())
+try:
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+except Exception as exc:
+    logger.error(f"fetch failed: {exc}")
+    yield event.plain_result("请求失败，请稍后再试。")
 ```
+
+## Handler Documentation
+
+- Give command handlers a short docstring. AstrBot can surface it in help output.
+- Keep handler logic thin and move business logic into helper modules when complexity grows.
+
+## Hook Messaging Rules
+
+For these hooks, send messages with `await event.send(...)`, never `yield`:
+
+- `@filter.on_llm_request()`
+- `@filter.on_llm_response()`
+- `@filter.on_decorating_result()`
+- `@filter.after_message_sent()`
 
 ## Accessing Platform Instances
 
 ```python
-from astrbot.api.platform import AiocqhttpAdapter
-
 platform = self.context.get_platform(filter.PlatformAdapterType.AIOCQHTTP)
-assert isinstance(platform, AiocqhttpAdapter)
 ```
 
-## Calling QQ Protocol API (aiocqhttp)
+If you need protocol-specific behavior, guard it by platform type before calling adapter-specific APIs.
+
+## Querying Loaded Plugins And Platforms
 
 ```python
-@filter.command("delete")
-async def delete_msg(self, event: AstrMessageEvent):
-    if event.get_platform_name() == "aiocqhttp":
-        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-        assert isinstance(event, AiocqhttpMessageEvent)
-        client = event.bot
-        ret = await client.api.call_action('delete_msg', message_id=event.message_obj.message_id)
-        logger.info(f"delete_msg: {ret}")
+plugins = self.context.get_all_stars()
+platforms = self.context.platform_manager.get_insts()
 ```
 
-Protocol API docs: [Napcat](https://napcat.apifox.cn/) | [Lagrange](https://lagrange-onebot.apifox.cn/)
+## Delivery Checklist
 
-## Querying Loaded Plugins and Platforms
-
-```python
-# All loaded plugins
-plugins = self.context.get_all_stars()  # Returns list of StarMetadata
-
-# All loaded platforms
-from astrbot.api.platform import Platform
-platforms = self.context.platform_manager.get_insts()  # List[Platform]
-```
-
-## Best Practices
-
-- **Docstrings**: Always write a docstring for your handler functions; AstrBot uses them for the help menu.
-- **Ruff**: Format your code with `ruff` before submission.
-- **Async Everything**: Never use blocking calls like `time.sleep` or `requests.get`. Use `asyncio.sleep` and `httpx.AsyncClient`.
-- **Plugin Updates**: If extending an existing plugin's functionality, prefer submitting a PR to that plugin rather than creating a new one.
-- **Testing**: Test your plugin thoroughly before publishing.
-- **Comments**: Include clear comments in your code.
+- Code targets Python 3.10.
+- Network I/O is async.
+- Logging uses `from astrbot.api import logger`.
+- Persistent data uses `StarTools.get_data_dir()` when applicable.
+- User-facing failures are handled gracefully.
+- Run `ruff format` and any relevant tests before delivery.
+- Test the plugin before publishing.

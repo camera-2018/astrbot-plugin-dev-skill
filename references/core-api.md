@@ -1,137 +1,111 @@
 # AstrBot Core API Reference
 
-## Base Classes
+## Canonical Imports
+
+Use these imports unless the current plugin already follows another valid AstrBot pattern:
+
+```python
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.star import Context, Star, StarTools
+```
+
+Notes:
+
+- `filter` should be imported from `astrbot.api.event`, not shadowed by Python's built-in `filter`.
+- `logger` should come from `astrbot.api`, not `logging` or third-party logger packages.
+- `register` still exists in `astrbot.api.star`, but it is deprecated. Prefer a plain `Star` subclass plus `metadata.yaml`.
+
+## Core Objects
 
 ### `Star`
 
-The base class for all AstrBot plugins.
-
-- `context: Context`: The global context object.
-- `config: AstrBotConfig`: (Optional) Plugin configuration, passed in `__init__` when `_conf_schema.json` exists.
-- `name: str`: Plugin name (available >= v4.9.2).
-- `terminate()`: (Optional) Called when the plugin is unloaded or disabled.
-- `text_to_image(text, return_url=True)`: Render text to an image. Returns a URL or local path.
-- `html_render(html, data, options={})`: Render HTML+Jinja2 template to an image.
-- `put_kv_data(key, value)`: Store a key-value pair (>= v4.9.2).
-- `get_kv_data(key, default)`: Retrieve a KV value (>= v4.9.2).
-- `delete_kv_data(key)`: Delete a KV entry (>= v4.9.2).
+- Base class for plugins.
+- Handlers should be methods on the `Star` subclass.
+- `context: Context` is the runtime context object.
+- `config` may be passed into `__init__` when `_conf_schema.json` exists.
+- `terminate()` is optional and runs when the plugin is unloaded.
+- `text_to_image(...)` and `html_render(...)` are available for image rendering.
+- KV helpers such as `put_kv_data`, `get_kv_data`, and `delete_kv_data` are available in newer versions.
 
 ### `Context`
 
-The central registry and service provider.
+- AstrBot runtime context for plugin services and registration.
+- `send_message(umo, chains)`: send a proactive message to a session.
+- `get_using_provider(umo)`: get the current LLM provider.
+- `get_provider_by_id(provider_id)`: get a specific provider.
+- `get_current_chat_provider_id(umo)`: get the active chat model provider ID.
+- `llm_generate(...)`: call an LLM directly.
+- `tool_loop_agent(...)`: run a tool-loop agent.
+- `get_platform(adapter_type)`: get a platform adapter instance.
+- `add_llm_tools(*tools)`: register LLM tools.
+- `get_all_stars()`: get loaded plugins.
+- `conversation_manager` and `persona_manager`: access conversation and persona services.
 
-- `send_message(umo, chains)`: Send a proactive message to a session.
-- `get_using_provider(umo)`: Get the current LLM provider for a session.
-- `get_provider_by_id(provider_id)`: Get an LLM provider by its ID.
-- `get_all_providers()`: Get all LLM providers.
-- `get_current_chat_provider_id(umo)`: Get the current chat model provider ID (>= v4.5.7).
-- `llm_generate(chat_provider_id, prompt, ...)`: Call an LLM directly (>= v4.5.7).
-- `tool_loop_agent(event, chat_provider_id, prompt, tools, ...)`: Run a tool-loop agent (>= v4.5.7).
-- `get_platform(adapter_type)`: Get a platform adapter instance.
-- `add_llm_tools(*tools)`: Register tools for LLM function calling (>= v4.5.1).
-- `get_llm_tool_manager()`: Get the LLM Tool Manager (contains all registered tools).
-- `get_using_stt_provider(umo)`: Get the current STT provider.
-- `get_using_tts_provider(umo)`: Get the current TTS provider.
-- `get_all_stt_providers()`, `get_all_tts_providers()`, `get_all_embedding_providers()`: Get all providers of a type.
-- `conversation_manager`: Access the `ConversationManager`.
-- `persona_manager`: Access the `PersonaManager`.
-- `platform_manager.get_insts()`: Get all loaded platform instances.
-- `get_all_stars()`: Get all loaded plugins (`StarMetadata`).
+### `StarTools`
+
+- Use `StarTools.get_data_dir()` for persistent plugin data.
+- It returns a `Path` pointing at `data/plugin_data/<plugin_name>/`.
 
 ### `AstrMessageEvent`
 
-Represents an incoming message event.
-
-- `message_str`: The plain text content of the message.
-- `message_obj`: The `AstrBotMessage` object.
-- `unified_msg_origin`: The unique session identifier (format: `platform_name:message_type:session_id`).
-- `get_sender_id()`: Get sender's platform user ID.
-- `get_sender_name()`: Get sender's display name.
-- `get_group_id()`: Get group ID (empty string for private messages).
-- `get_platform_name()`: Get the platform adapter name (e.g., `"aiocqhttp"`).
-- `plain_result(text)`: Create a plain text response.
-- `image_result(path_or_url)`: Create an image response.
-- `chain_result(chain)`: Create a message chain response.
-- `make_result()`: Create an empty `MessageEventResult` to build manually.
-- `send(result)`: Send a result immediately (for use in hooks/session waiters where `yield` is not allowed).
-- `get_result()`: Get the current result (used in `on_decorating_result` hook).
-- `stop_event()`: Prevent further processing of this event by other plugins or the LLM.
+- `message_str`: plain-text message.
+- `message_obj`: structured message object.
+- `unified_msg_origin`: session identifier for proactive messages and provider selection.
+- `get_sender_id()`, `get_sender_name()`, `get_group_id()`, `get_platform_name()`: sender and platform helpers.
+- `plain_result(text)`, `image_result(path_or_url)`, `chain_result(chain)`, `make_result()`: build results.
+- `send(result)`: send directly when a hook cannot use `yield`.
+- `get_result()`: inspect or modify the current result in decorating hooks.
+- `stop_event()`: stop later processing.
 
 ### `AstrBotMessage`
 
-The message object from the platform adapter. Access via `event.message_obj`.
+Available through `event.message_obj` and contains the parsed message chain plus the raw platform payload.
 
-```python
-class AstrBotMessage:
-    type: MessageType          # Message type (PRIVATE_MESSAGE, GROUP_MESSAGE)
-    self_id: str               # Bot's ID
-    session_id: str            # Session ID
-    message_id: str            # Message ID
-    group_id: str              # Group ID (empty for private messages)
-    sender: MessageMember      # Sender info
-    message: List[BaseMessageComponent]  # Message chain
-    message_str: str           # Plain text (all Plain segments concatenated)
-    raw_message: object        # Platform-specific raw message object
-    timestamp: int             # Message timestamp
-```
+## Commands And Decorators
 
-## Decorators
+- `@filter.command(name, alias=set(), priority=0)`
+- `@filter.command_group(name, alias=set())`
+- `@filter.regex(pattern)`
+- `@filter.event_message_type(type)`
+- `@filter.permission_type(type)`
+- `@filter.platform_adapter_type(type)`
+- `@filter.on_astrbot_loaded()`
+- `@filter.on_waiting_llm_request()`
+- `@filter.on_llm_request()`
+- `@filter.on_llm_response()`
+- `@filter.on_decorating_result()`
+- `@filter.after_message_sent()`
+- `@filter.llm_tool(name="...")`
 
-### Plugin Registration
+## Command Parameters
 
-- `@register` is deprecated in newer versions. Please use `metadata.yaml` to define plugin metadata. AstrBot will automatically detect the plugin class inheriting from `Star`.
+`@register` is deprecated in newer versions. Please use `metadata.yaml` to define plugin metadata. AstrBot will automatically detect the plugin class inheriting from `Star`.
 
-### Commands
-
-- `@filter.command(name, alias=set(), priority=0)`: Registers a command.
-- `@filter.command_group(name, alias=set())`: Registers a command group.
-
-#### Command Parameters (Auto-Parsed)
+AstrBot can auto-parse command parameters from type hints:
 
 ```python
 @filter.command("add")
 async def add(self, event: AstrMessageEvent, a: int, b: int):
-    # /add 1 2 -> Result: 3
     yield event.plain_result(f"Result: {a + b}")
 ```
 
-#### Command Groups (Nestable)
+## Command Groups
 
 ```python
 @filter.command_group("math")
 def math(self):
     pass
 
+
 @math.command("add")
 async def add(self, event: AstrMessageEvent, a: int, b: int):
     yield event.plain_result(f"Result: {a + b}")
-
-# Nested groups use .group() instead of .command_group()
-@math.group("calc")
-def calc():
-    pass
-
-@calc.command("sum")
-async def calc_sum(self, event: AstrMessageEvent, a: int, b: int):
-    # /math calc sum 1 2
-    yield event.plain_result(f"Result: {a + b}")
 ```
 
-#### Command Aliases
+## Event Filters
 
-```python
-@filter.command("help", alias={'帮助', 'helpme'})
-async def help_cmd(self, event: AstrMessageEvent):
-    yield event.plain_result("Available commands: ...")
-```
-
-### Event Filters
-
-- `@filter.event_message_type(type)`: Filters by event type (`EventMessageType.PRIVATE_MESSAGE`, `GROUP_MESSAGE`, `ALL`).
-- `@filter.platform_adapter_type(type)`: Filters by platform (`PlatformAdapterType.AIOCQHTTP`, `QQOFFICIAL`, `GEWECHAT`, `ALL`). Supports bitwise OR: `PlatformAdapterType.AIOCQHTTP | PlatformAdapterType.QQOFFICIAL`.
-- `@filter.permission_type(type)`: Filters by user permission (`PermissionType.ADMIN`).
-
-#### Multiple Filters (AND Logic)
+You can combine filters to constrain handlers by event type, platform, permission, or regex.
 
 ```python
 @filter.command("secret")
@@ -141,32 +115,28 @@ async def secret_cmd(self, event: AstrMessageEvent):
     yield event.plain_result("Admin-only private command!")
 ```
 
-### Event Hooks
+## Hooks
 
-Event hooks **cannot** be combined with `@filter.command`, `@filter.command_group`, `@filter.event_message_type`, etc.
+Event hooks should not be mixed casually with normal command semantics.
 
-In hooks, **do not** use `yield` to send messages. Use `await event.send(result)` instead.
+- `@filter.on_astrbot_loaded()`: runs after AstrBot initialization.
+- `@filter.on_waiting_llm_request()`: runs before acquiring the session lock; useful for "thinking..." messages.
+- `@filter.on_llm_request()`: receives `(self, event, req: ProviderRequest)`.
+- `@filter.on_llm_response()`: receives `(self, event, resp: LLMResponse)`.
+- `@filter.on_decorating_result()`: modify `event.get_result().chain` before sending.
+- `@filter.after_message_sent()`: runs after a message is sent.
 
-- `@filter.on_astrbot_loaded()`: Hook for when the bot finishes initialization.
-- `@filter.on_waiting_llm_request()`: Hook when waiting for LLM request (before acquiring the session lock). Good for sending "thinking..." feedback.
-- `@filter.on_llm_request()`: Hook before LLM processing. Receives `(self, event, req: ProviderRequest)`. Can modify `req.system_prompt`, etc.
-- `@filter.on_llm_response()`: Hook after LLM response. Receives `(self, event, resp: LLMResponse)`.
-- `@filter.on_decorating_result()`: Hook before sending a message. Modify `event.get_result().chain`.
-- `@filter.after_message_sent()`: Hook after a message has been sent to the platform.
+## Handler Rules That Matter To The Reviewer
 
-### LLM Tools
+- Except for `@filter.on_astrbot_loaded()`, every `@filter` handler should accept an `event: AstrMessageEvent` parameter.
+- For normal commands and listeners, use `yield event.plain_result(...)` or other result builders.
+- In `on_llm_request`, `on_llm_response`, `on_decorating_result`, and `after_message_sent`, do not use `yield`; call `await event.send(...)` if you need to send a message.
+- `on_llm_request` and `on_llm_response` must each accept three parameters: `self`, `event`, and the request/response object.
+- Do not combine `@filter.permission_type(...)` with `@filter.llm_tool(...)` on the same method; that permission control is not valid there.
 
-- `@filter.llm_tool(name)`: Registers an LLM tool via decorator with docstring parsing.
+## LLM Tools
 
-### Priority
-
-All commands, filters, and hooks support a `priority` parameter (default `0`). Higher priority executes first.
-
-```python
-@filter.command("important", priority=10)
-async def important(self, event: AstrMessageEvent):
-    yield event.plain_result("I run first!")
-```
+`@filter.llm_tool(...)` registers a tool via decorator. Tool objects can also be registered through `self.context.add_llm_tools(...)`.
 
 ## Controlling Event Propagation
 
@@ -175,20 +145,18 @@ async def important(self, event: AstrMessageEvent):
 async def check(self, event: AstrMessageEvent):
     if not self.is_valid():
         yield event.plain_result("Check failed")
-        event.stop_event()  # Stop all further processing (other plugins, LLM, etc.)
+        event.stop_event()
 ```
 
 ## Platform Compatibility Matrix
 
-| Platform              | At  | Plain | Image | Record | Video | Reply | Proactive Messages |
-| --------------------- | --- | ----- | ----- | ------ | ----- | ----- | ------------------ |
-| QQ (aiocqhttp)        | ✅  | ✅    | ✅    | ✅     | ✅    | ✅    | ✅                 |
-| Telegram              | ✅  | ✅    | ✅    | ✅     | ✅    | ✅    | ✅                 |
-| QQ Official           | ❌  | ✅    | ✅    | ❌     | ❌    | ❌    | ❌                 |
-| Lark (飞书)           | ✅  | ✅    | ✅    | ❌     | ❌    | ✅    | ✅                 |
-| WeCom (企业微信)      | ❌  | ✅    | ✅    | ✅     | ❌    | ❌    | ❌                 |
-| DingTalk              | ❌  | ✅    | ✅    | ❌     | ❌    | ❌    | ❌                 |
+| Platform         | At  | Plain | Image | Record | Video | Reply | Proactive |
+| ---------------- | --- | ----- | ----- | ------ | ----- | ----- | --------- |
+| QQ (aiocqhttp)   | ✅  | ✅    | ✅    | ✅     | ✅    | ✅    | ✅        |
+| Telegram         | ✅  | ✅    | ✅    | ✅     | ✅    | ✅    | ✅        |
+| QQ Official      | ❌  | ✅    | ✅    | ❌     | ❌    | ❌    | ❌        |
+| Lark             | ✅  | ✅    | ✅    | ❌     | ❌    | ✅    | ✅        |
+| WeCom            | ❌  | ✅    | ✅    | ✅     | ❌    | ❌    | ❌        |
+| DingTalk         | ❌  | ✅    | ✅    | ❌     | ❌    | ❌    | ❌        |
 
-- QQ (aiocqhttp) supports all message types, including `Poke`, `Node(s)` (forwarded messages).
-- QQ Official and DingTalk auto-prepend `At` when sending messages.
-- DingTalk images only support HTTP URLs.
+If the target platform is known, keep your handlers and message components compatible with that adapter.
